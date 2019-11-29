@@ -75,6 +75,23 @@ query_condition read_query_condition(std::ifstream &in,
   return query_condition(out);
 }
 
+void write_output(Pipe<query> &pipe) {
+  std::ofstream outfile;
+  outfile.open("output.txt");
+  auto curr = pipe.pop();
+  while (curr != nullptr) {
+    if (curr->hits.size() > 0) {
+      for (auto hit : curr->hits) {
+        outfile << hit << std::endl;
+      }
+    } else
+      outfile << "{could not find records}" << std::endl;
+
+    curr = pipe.pop();
+  }
+  outfile.close();
+}
+
 int main(int argc, char const *argv[]) {
   std::ifstream input;
   input.open("input.txt");
@@ -86,6 +103,8 @@ int main(int argc, char const *argv[]) {
     partitions.push_back(std::thread(partition, i + 1, std::ref(pipes[i]),
                                      std::ref(pipes[i + 1])));
   }
+  std::thread output_thread =
+      std::thread(write_output, std::ref(pipes[pipes.size() - 1]));
 
   int number_of_queries;
   input >> number_of_queries;
@@ -103,20 +122,7 @@ int main(int argc, char const *argv[]) {
   std::for_each(partitions.begin(), partitions.end(),
                 [](std::thread &th) { th.join(); });
 
-  std::ofstream outfile;
-  outfile.open("output.txt");
-  auto curr = pipes[pipes.size() - 1].pop();
-  while (curr != nullptr) {
-    if (curr->hits.size() > 0) {
-      for (auto hit : curr->hits) {
-        outfile << hit << std::endl;
-      }
-    } else {
-      outfile << "{could not find records}" << std::endl;
-    }
-    curr = pipes[pipes.size() - 1].pop();
-  }
-  outfile.close();
+  output_thread.join();
 
   return 0;
 }
