@@ -1,0 +1,392 @@
+<div class="row">
+    <div class="col-md-12">
+        <h2 id="második-beadandó">Második beadandó</h2>
+        <h5 id="changelog">changelog:</h5>
+        <ul>
+            <li>2019.11.22: automatikus tesztelés, pontosítás (üres <code>hits</code> esetén az elvárt kimenet,
+                duplikált rekordok)</li>
+            <li>2019.11.11: feladatkiírás, határidő, segédfájlok</li>
+        </ul>
+        <hr>
+        <h3 id="a-megoldandó-probléma-a-következő">A megoldandó probléma a következő:</h3>
+        <p>Feladatunk egy elosztott módon működő adatbázis leegyszerűsített modellezése lesz. Ennek működése:</p>
+        <p>Az adatbázisunk egyetlen nagy táblából áll, de a tábla több részre particionálva van tárolva (továbbiakban a
+            partíciók száma legyen <code>N</code> ). A lekérdezések emiatt minden partíción végig kell, hogy fussanak.
+            Indexeléssel és egyéb optimalizációs eljárásokkal jelenleg nem foglalkozunk - az adatok “random” módon
+            vannak elosztva a partíciók közt.</p>
+        <p>A megoldásban egy ilyen rendszer egyszerűsített futását kell modellezni és szimulálni.</p>
+        Szerencsére egy partíció ha végzett egy lekérdezés kiértékelésével, az általa gyűjtött adatokat továbbítva a
+        következőnek már tud újabb lekérdezést fogadni és számolni, ezért a megoldást <em>párhuzamos</em> módon
+        készítjük el, melyben az egyes partíciók működését reprezentáló függvényt külön szálon, egyszerre fogjuk
+        futtatni! Az feladatot és a megoldást az adatcsatorna tételére (pipeline) visszavezetve fogjuk megvalósítani,
+        így <code>N</code> partícióval számolva <code>M</code> lekérdezés esetén (feltehető, hogy
+        <code>N &lt;&lt; M</code> ) a futási idő így <code>N + M</code> nagyságrendűre csökkenthető az
+        <code>N x M</code> helyett.
+        <hr>
+        <p>Az adatbázisban tárolt rekordok ( <code>record</code> ) három mezővel rendelkeznek:</p>
+        <ul>
+            <li><code>value</code> : egész szám</li>
+            <li><code>flag</code> : logikai érték</li>
+            <li><code>data</code> : szöveges adat, mely felvehet <code>NULL</code> értéket is.</li>
+        </ul>
+        <p>A lekérdezések feltételei ( <code>conditions</code> ) a partíció által tárolt rekordokon értékelődnek ki -
+            egy-egy rekordon vagy igaz vagy hamis értéket fognak adni. Amennyiben megfelelt minden feltételnek (igazat
+            kaptunk), úgy a lekérdezéshez tartozó eredményekhez ( <code>hits</code> ) hozzávesszük az aktuális rekordot,
+            egyéb esetben nem. Jelen verzióban előfordulhat, hogy egy rekord több partícióban is megjelenik, a
+            rekordokra egyediségi megkötést nem teszünk.</p>
+        <p>Egy-egy partíció ilyen lekérdezések kiértékelését fogja végezni “végtelenségig” tehát a következő módon (a
+            pontosabb működést: lásd lejjebb):</p>
+        <ul>
+            <li>Fogad egy lekérdezést az előző partíciótól</li>
+            <li>A tárolt rekordokon végigpörgeti a lekérdezést
+                <ul>
+                    <li>Amennyiben egy rekordon igaz eredményt ad a feltétel, úgy az aktuális lekérdezés eredményeihez (
+                        <code>hits</code> ) hozzáveszi az aktuális rekordot, egyébként nem</li>
+                </ul>
+            </li>
+            <li>Az aktuális lekérdezést (és benne az általa gyűjtött eredményeket) továbbítja a következő partíciónak
+            </li>
+        </ul>
+        <hr>
+        <h4 id="segédfájl">Segédfájl</h4>
+        <p>Annak érdekében, hogy ne mindent nulláról kelljen kitalálni és implementálni, a megoldáshoz elérhető egy
+            <code>utils.hpp</code> fájl (<a href="http://people.inf.elte.hu/mykeesg/19_20_1/utils.hpp" target="_blank"
+                download="">&gt;&gt;link&lt;&lt;</a> ). Ebben a legfontosabb dolgok megvalósításra kerültek - kérlek
+            titeket, hogy lehetőleg ezt használjátok az implementációkor (különben szinte biztos, hogy nem lesz
+            szálbiztos a kódod)! Ennek felépítése az alábbi:</p>
+        <p>A rekordokat a <code>record</code> struct reprezentálja. Mivel a <code>data</code> adattag felvehet
+            <code>NULL</code> értéket is, ezért ezt <code>shared_ptr&lt;std::string&gt;</code> típussal fogjuk
+            reprezentálni, melyet <code>nullptr</code> -re fogunk állítani, ha az adott mezőt <code>NULL</code> értéket
+            venne fel. Az <code>operator&lt;&lt;(..)</code> túl lett terhelve erre a típusra, így könnyen ki lehet írni
+            egy-egy rekordot a konzolra, illetve majd az output előállításához is ezt kell használni.</p>
+        <p>Ugyanitt megtalálható egy <code>condition</code> nevű, absztrakt osztály, melynek egyetlen metódusa van; mely
+            egy rekordon kiértékelve igaz vagy hamis eremdényt adhat.(
+            <code>virtual bool eval(const record &amp;) const = 0;</code> ). Ez egy lekérdezési feltétel egy tagját
+            reprezentálja. Ebből az osztályból öröklődve kell majd a 3 különböző típusú mezőre vonatkozó feltételeket
+            megvalósítani.</p>
+        <p>Ugyanitt található egy <code>query_condition</code> osztály, mely egy lekérdezést reprezentál. Két adattagja
+            van:</p>
+        <ul>
+            <li><code>std::list&lt;std::shared_ptr&lt;condition&gt;&gt; conditions</code> : a lekérdezéshez tartozó
+                feltételek listája. A lekérdezés akkor ad igazat egy rekordon, ha a feltétellista minden eleme igazat ad
+                rajta. Mivel polimorfikus konténerről van szó, ezért az ősosztályhoz tartozó pointereket fogjuk csak
+                eltárolni benne - a memoryleak elkerülése érdekében nem próbáljuk mi allokálni és felszabadítani ezeket,
+                hanem a smart pointerekre bízzuk ennek megoldását.</li>
+            <li><code>std::list&lt;record&gt; hits</code> : A lekérdezés során megtalált rekordok ebbe kerülnek.</li>
+        </ul>
+        <p>Az adatcsatornában / pipeline-ban ilyen query_condition-ok fognak “utazni”. Annak érdekében, hogy ne kelljen
+            lemásolni minden egyes átadásnál ezt (és főleg a <code>hits</code> adattagját, melyben <em>rengeteg</em>
+            rekord szerepelhet), ezeket is pointerként fogjuk kezelni. Erre a <code>query</code> típus szolgál (
+            <code>using query = std::shared_ptr&lt;query_condition&gt;;</code> ).</p>
+        <p>Megtalálható még ebben a fájlban egy <code>Pipe&lt;T&gt;</code> osztály, mely egy szálbiztos
+            <code>queue&lt;T&gt;</code> wrappere - így a <code>push()</code> és a <code>pop()</code> is biztonságosan
+            használható - valamint a <code>pop()</code> üres queue esetén nem száll el, hanem addig várakozik, amíg
+            adatot nem kap. Mivel a mutexek nem mozgathatóak vagy változtathatóak, ezért ezt az osztályt is csak
+            alapértelmezett konstruktorral lehet létrehozni.</p>
+        A <code>T</code> template paraméter a mi esetünkben a <code>query</code> lesz.
+        <hr>
+        <h4 id="a-program-működése">A program működése</h4>
+        <p>A főprogram feladata a fentiek alapján a szálak elindítása, és a lekérdezések beolvasása / futtatása a
+            partíciókon.</p>
+        <p>A bemeneti fájlban ( <code>input.txt</code> ) első sorában egyetlen számot találhatunk (
+            <code>1 &lt;= N</code> ), ez mondja meg, hogy összesen hány partícióra lesz bontva az adatbázisunk.</p>
+        <p>Ez alapján kell létrehozni összesen <code>N+1</code> csatornát reprezentáló objektumot ( pl.
+            <code>std::vector</code> -ral ), valamint <code>N</code> szálat, melyek egy-egy partíció működését
+            reprezentálják (a továbbiakban <code>1 &lt;= i &lt;= N</code> ) - ezeknek ne felejtsd el átadni a megfelelő
+            pipe-referenciákat, hogy honnan olvasson és hova továbbítsa az eredményét!</p>
+        <p>A partíciók működése a fent leírtakat kiegészítve az alábbi kell, hogy legyen:</p>
+        <ul>
+            <li>
+                <p>Az <code>i</code> -ik partícióhoz tartozó szál először is beolvassa az <code>input{i}.dat</code> fájl
+                    tartalmát, mely az általa tárolt adatokat tartalmazza az alábbi módon:</p>
+                <ul>
+                    <li>A fájl első sorában egy <code>K</code> egész olvasható, összesen ennyi rekord található a
+                        fájlban.</li>
+                    <li>Ez után összesen <code>K</code> sorban <code>K</code> rekord adatai olvashatóak - ezek szóközzel
+                        vannak tagolva. A sor első eleme egy egész ( <code>value</code> ), a második egy bool érték (
+                        <code>flag</code> ) reprezentációja egész formában ( <code>0</code> , ha hamis, <code>1</code>
+                        ha igaz), majd egy string.</li>
+                    <li>Ha a string értéke a <code>"NULL"</code> string, az azt jelenti, hogy az adott rekordban a mező
+                        értéke <code>NULL</code> .</li>
+                    <li>Feltehető, hogy a string nem tartalmaz whitespaceket.</li>
+                </ul>
+            </li>
+            <li>Ez után a hozzá tartozó csatornából kiolvassa az első <code>query</code> objektumot.</li>
+            <li>Innentől kezdve egészen addig, amíg a csatornából tud <code>query</code> -t olvasni, a fent ismertetett
+                módon feldolgozza a lekérdezést, és továbbítja az adatokat a megfelelő helyre. A paríciókat reprezentáló
+                folyamat nem tudhatja előre, mennyi adatot kap! (A main küldjön el egy <code>nullptr</code> -t pl., ez
+                jelzi majd azt, hogy több query-t nem akarunk futtatni, azaz a program leáll),</li>
+            <li>
+                <p>Ha mindennel végzett, a függvénynek nincs más feladata.</p>
+            </li>
+        </ul>
+        <p>(Ne felejtsd el a <code>nullptr</code> -t / a program leállását jelző adatot is végigküldeni a csatornán,
+            különben csak az első partícióhoz tartozó szál fog leállni, a többi deadlock-ba kerül.)</p>
+        <p>A main, miután elindította a szálakat (melyek először inicializálják az adataikat), az <code>input.txt</code>
+            -t tovább olvasva tudja a lekérdezéseket előállítani.</p>
+        <p>Egy lekérdezés feltételek listájából áll, ezért először a feltételeket nézzük át:</p>
+        <p>Mivel egy rekordnak három mezője van, ezért összesen három különböző feltétel típust tudunk megfogalmazni:
+        </p>
+        <ul>
+            <li>
+                <p><code>bool_condition</code> : a rekord <code>flag</code> mezőjének logikai értékét hasonlítjuk a
+                    megadott értékhez (szimpla egyenlőségvizsgálat).</p>
+            </li>
+            <li><code>int_condition</code> : a rekord <code>value</code> mezőjére van megfogalmazva. Egy adott számot
+                hasonlítunk a rekord mezőjéhez. Három alfeltételt engedünk meg:
+                <ul>
+                    <li>(szigorúan) kisebb reláció (ezt később <code>-1</code> jelzi),</li>
+                    <li>egyenlőség reláció (ennek jele lesz a <code>0</code> ),</li>
+                    <li>(szigorúan) nagyobb reláció ( <code>+1</code> )</li>
+                </ul>
+                <p>Igazat akkor ad, ha az adott szám és a rekord mezője megfelelő relációban áll egymással (itt tehát
+                    nem csak egyenlőség lehet, hanem kisebb- vagy nagyobb reláció is).</p>
+            </li>
+            <li>
+                <p><code>string_condition</code> : a rekordban található <code>data</code> mező értékét vizsgálja egy
+                    megadott értékhez. Figyelembe kell venni hogy akár a <code>data</code> akár a vizsgált érték lehet
+                    <code>NULL</code> (ez is egyenlőség).</p>
+            </li>
+        </ul>
+        <p>A lekérdezések az input fájlban az alábbi módon olvashatóak:</p>
+        <ul>
+            <li>Először egy szám található ( <code>Q</code> ), mely azt mondja meg, hogy összesen hány lekérdezést
+                fogunk beolvasni a fájlból.</li>
+            <li>
+                <p>Egy-egy lekérdezés az alábbi módon olvasható ki:</p>
+                <ul>
+                    <li>Először egy számot olvashatunk ( <code>C</code> ), mely azt jelzi, hogy hány feltétel tartozik
+                        az aktuális query-hez (azaz a <code>conditions</code> méretét az adott query-nél).</li>
+                    <li>
+                        <p>Az ezt követő <code>C</code> sorban feltételek olvashatóak:</p>
+                        <ul>
+                            <li>Az első szám azt mondja meg, milyen típusú lekérdezésről van szó. <code>1</code> , ha
+                                <code>bool_condition</code> , <code>2</code> olvasható <code>int_condition</code> esetén
+                                és <code>3</code> , ha <code>string_condition</code> -ről van szó.</li>
+                            <li>A sorban a többi érték száma és típusa attól függ, hogy milyen típusú az aktuális
+                                feltétel.</li>
+                            <li><code>bool_condition</code> esetében egy <code>{0, 1}</code> érték jelzi, hogy hamis,
+                                vagy igaz flaget akarunk -e vizsgálni.</li>
+                            <li><code>int_condition</code> esetén először a paramétert, másodjára pedig a relációt lehet
+                                olvasni (ez a <code>{-1, 0, +1}</code> értékek valamelyike, a fent ismeretett módon).
+                            </li>
+                            <li><code>string_condition</code> esetén vagy egy stringet, vagy a <code>"NULL"</code> szót
+                                olvashatjuk.</li>
+                            <li>Feltehető <code>string_condition</code> esetén, hogy az olvasott string nem tartalmaz
+                                whitespaceket.</li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+        <p>A lekérdezések beolvasásával elő kell állítani egy <code>query</code> objektumot és azt az első partíciónak
+            elküldeni.</p>
+        <p>Egy lekérdezéshez tartozhat akár több, azonos típusú feltétel is -az egész értékre intervallumon belüli
+            feltételt csak így tudunk jelen példában megadni (azaz a <code>5 &lt; value &lt; 10</code> feltételt
+            <code>5 &lt; value &amp;&amp; 10 &gt; value</code> módon tudjuk előállítani).</p>
+        <p>A feltételeket mindig egy nagy logikai <em>és</em>-ként értelmezzük, a mostani feladatban nem fogjuk
+            <em>vagy</em>-olni azokat.</p>
+        <p>Ha az inputot végigolvasta a fő folyamat, akkor valamilyen módon (pl.egy <code>nullptr</code> -t küldve)
+            jelezni kell, hogy több lekérdezés már nem fog érkezni. Előre nem kaphatják meg a partíciók, hogy hány
+            adattal dolgoznak!</p>
+        <p>A számítások / program eredménye az <code>output.txt</code> fájlba kerül (ennek írásához érdemes lehet még
+            egy szálat elindítani, ami csak egy <code>Pipe&lt;&gt;</code> referenciát kap meg, ahova az utolsó partíció
+            küldi az adatait). Ebbe az adatcsatornán végig ért összes, feltételnek megfelelő rekord kerül, soronként egy
+            (az <code>operator&lt;&lt;()</code> a <code>utils.hpp</code> -ben túl van terhelve). Ennek formája :
+            <code>{&lt;value&gt;;&lt;flag&gt;;&lt;data&gt;}</code> , azaz pl. <code>{3;false;test}</code> vagy
+            <code>{4;false;NULL}</code> . Ha más módon kerül a rekord a fájlba, a tesztelésen meg fog bukni. Ahhoz, hogy
+            a lekérdezések közötti elválasztást követni lehessen az outputban, az egyes queryk elválasztására egy üres
+            sort kell a fájlba írni.</p>
+        <p>A <code>hits</code> nem csak egyedi rekordokat tartalmaz, mivel nincs megkötés erre vonatkozóan, így
+            előfordulhat hogy ugyan az a rekord többször is kiírásra kerül. Ez nem probléma, a lekérdezés ilyen
+            esetekben is helyes, és a duplikátumokat is mind ki kell, hogy írja a megfelelő sorrendben.</p>
+        <p>Ha egy query-nél nem érkezett vissza találat (mert egy rekordon sem teljesültek a feltételek), akkor ehhez
+            tartozóan a kimenetben a <code>{could not find records}</code> sor szerepeljen!</p>
+        <p>Az utolsó rekord után csak egy üres sor legyen a fájlban, ne kettő!</p>
+        <p>Végül az összes szálat be kell várni, mielőtt kilép a főprogram.</p>
+        <p>A főprogram csak az <code>input.txt</code> fájlt olvashatja be! Az adatok inicializálása szálanként
+            történjen! A fő szál ne végezzen más számítást a fentieken kívül (ne értékeljen ki feltételeket vagy
+            futtasson rekordokon bármit)!</p>
+        <hr>
+        <h4 id="feltehető-hogy..">Feltehető, hogy..</h4>
+        <ul>
+            <li>Az inputfájl felépítése megfelel a fentebb írtaknak.</li>
+            <li>Az inputfájlok helyesen vannak kitöltve, mindenhol pontosan annyi adat található, amennyit a
+                specifikációban szereplő szám meghatároz.</li>
+            <li>A <code>"NULL"</code> string extremális elemként működik mind a rekordok mind a queryk esetén, azaz nem
+                fordul elő, mint tárolandó érték, csak mint a <code>NULL</code> -t jelző elem.</li>
+            <li>Az <code>int_condition</code> -ök esetében csak a <code>{-1, 0, +1}</code> halmaz eleme fordul elő, mint
+                relációs feltétel (A <code>+</code> karakter nem olvasható az inputfájlban, csupán matematikai
+                egyértelműség szempontjából áll a feladat szövegében mindenhol).</li>
+            <li>A <code>bool_condition</code> -ök esetén csak a <code>{0, 1}</code> halmaz valamely elemét lehet olvasni
+                (0 -&gt; hamis, 1 -&gt; igaz).</li>
+            <li>A <code>record.data</code> mező és a <code>string_condition</code>-ban tárolt string sem tartalmaz
+                whitespaceket.</li>
+        </ul>
+        <h4 id="példafájlok">Példafájlok</h4>
+        <p>Egy példa bemenet ( <code>input.txt</code> ):</p>
+        <pre><code>1
+    3
+    3
+    1 0
+    2 0 -1
+    3 test
+    1
+    3 NULL
+    1
+    3 other</code></pre>
+        <p>Ennek értelmezése:</p>
+        <pre><code>1         -&gt; egy partícióra van bontva az adatbázis.
+    3         -&gt; három query-t fogunk futtatni.
+    3         -&gt; az első query feltételét 3 tagból kapjuk meg.
+    1 0       -&gt; az első tag egy logikai feltétel, ahol hamis értéket kell figyelni
+    2 0 -1    -&gt; a második tag egy egészre vonatkozik, a rekordnál {0 &lt; value} kell, hogy legyen.
+    3 test    -&gt; a harmadik tag azt mondja, hogy a rekord data mezője a "test" értéket kell, hogy felvegye.
+    1         -&gt; a második query egyetlen feltételből áll.
+    3 NULL    -&gt; a rekord data mezője NULL.
+    1         -&gt; a harmadik query egy feltételből áll
+    3 other   -&gt; a rekord data mezője, amire keresünk az "other" érték</code></pre>
+        <p>Az egyetlen partícióhoz tartozó adatfájl ( <code>input1.dat</code> ):</p>
+        <pre><code>4
+    1 0 testSTR
+    2 1 test
+    3 0 test
+    4 0 NULL</code></pre>
+        <p>Azaz:</p>
+        <pre><code>4               -&gt; 4 rekord van ebben a partícióban
+    1 0 testSTR     -&gt; {1;false;testSTR}
+    2 1 test        -&gt; {2;true;test}
+    3 0 test        -&gt; {3;false;test}
+    4 0 NULL        -&gt; {4;false;NULL}</code></pre>
+        <p>Az ehhez tartozó elvárt kimenet ( <code>output.txt</code> ):</p>
+        <pre><code>{3;false;test}
+    
+    {4;false;NULL}
+    
+    {could not find records}
+     </code></pre>
+        <p>Magyarázat:</p>
+        <pre><code>{3;false;test}
+    Az első esetben olyan rekordokat kerestünk, ahol a számérték pozitív, a flag hamis, a string értéke pedig "test".
+    
+    {4;false;NULL}
+    A második query olyan rekordokra volt kíváncsi, ahol a string érték nincs megadva, azaz NULL.
+    
+    {could not find records}
+    Nem volt olyan tárolt rekord, ahol a szöveges mező (data) az "other" értéket vette volna fel.
+    </code></pre>
+        <h4 id="másik-példa">Másik példa</h4>
+        <p>Az <code>input.txt</code> tartalma:</p>
+        <pre><code>3
+    2
+    3
+    2 0 -1
+    2 401 1
+    1 1
+    1
+    2 0 1</code></pre>
+        <p>Azaz: 3 partíció, 2 query. Első query -&gt; <code>0 &lt; value &lt; 401</code> rekordok, ahol a
+            <code>flag</code> értéke <code>true</code>. Második query -&gt; olyan rekordok, ahol
+            <code>value &lt; 0</code> olvasható.</p>
+        <p>Az <code>input1.dat</code> tartalma:</p>
+        <pre><code>10000
+    1 1 string1
+    2 1 string2
+    3 1 string3
+    4 1 string4
+    ....
+    10000 1 string10000</code></pre>
+        <p>Az <code>input2.dat</code> tartalma:</p>
+        <pre><code>10000
+    1 0 string1
+    2 0 string2
+    3 0 string3
+    4 0 string4
+    ....
+    10000 0 string10000</code></pre>
+        <p>Az <code>input3.dat</code> tartalma:</p>
+        <pre><code>10000
+    1 1 string1
+    2 0 string2
+    3 1 string3
+    4 0 string4
+    ....
+    10000 0 string10000</code></pre>
+        <p>Az <code>output.txt</code> tartalma:</p>
+        <pre><code>{1;true;string1}
+    {2;true;string2}
+    {3;true;string3}
+    ...
+    {400;true;string400}
+    {1;true;string1}
+    {3;true;string3}
+    ...
+    {399;true;string399}
+    
+    {could not find records}</code></pre>
+        <p>Magyarázat: Első query -&gt; <code>0 &lt; value &lt; 401</code> rekordok, ahol a <code>flag</code> értéke
+            <code>true</code> - az első partícióban ez az első 400 rekordot jelenti, mivel ott mindenhol igaz a flag
+            értéke, a második partícióban nincs ilyen adat, mivel ott minden esetben hamis a flag, a harmadik
+            partíciónál pedig a páratlan sorszámú adatoknál igaz a flag, így ezek közül a 401-nél kisebbek kerülnek az
+            outputba, azaz minden második. Második query -&gt; olyan rekordok, ahol <code>value &lt; 0</code> olvasható
+            -&gt; ez sehol sem teljesül, mivel mindenhol a value pozitív, így az eredménybe a
+            <code>{could not find records}</code> kell, hogy kerüljön.</p>
+        <h3 id="implementációs-követelmények">Implementációs követelmények</h3>
+        <p>A feladatot C++ nyelvben implementálva, a C++11 által biztosított thread lib segítségével kell megvalósítani.
+        </p>
+        <p><a href="http://people.inf.elte.hu/mykeesg/19_20_1/utils.hpp" target="_blank" download="">&gt;&gt;Ezen a
+                linken&lt;&lt;</a> le tudjátok tölteni az említett <code>utils.hpp</code> nevű header fájlt.</p>
+        <h3 id="általános-elvárások">Általános elvárások:</h3>
+        <p>Fokozottan kérünk mindenkit, hogy a beadandó határidejét (december 15, 23:59) vegye figyelembe! Kérjük
+            osszátok be az időtöket, hogy ne csússzatok le a határidőről semmi esetben sem! Ez után nem áll módunkban
+            elfogadni megoldásokat, kifogástól és indoklástól függetlenül! (Szült a halam, nem tudtam beadni, de
+            elküldöm emailben; pont feltöltöttem volna, de lezárt a BEAD, jó lesz facebookon?; Késett a vonat de majd
+            behozom pendriveon úgy jó? Nem, nem lesz jó egyik esetben sem.)</p>
+        <p>Kérünk mindenkit, hogy olvassa el a BEAD-on a hozzászólásokat, amiket írunk neki, mielőtt újra és újra
+            feltölti a megoldást, így elkerülhető, hogy feleslegesen terheljétek a szervert, és egy körben lehet a
+            legtöbb hibát javítani.</p>
+        <p>A megoldásaitokat egyetlen ZIP fájlba tömörítve töltsétek fel! Kérünk benneteket, hogy csak a szükséges
+            forrásfájl(oka)t rakjátok bele az állomány gyökerébe, teljes projektet, solutiont (.cbp, .sln, illetve az
+            ezekhez tartozó többi fájl), object fájlokat, vagy közvetlenül futtatható állományt (a.exe, a.out, etc..)
+            semmiképp sem!</p>
+        <p>A beadandót <strong>százalékosan értékeljük</strong>, a minél eredményesebb munkához a guide a lentebb
+            található linken elérhető. A kapott eredmény beleszámít a gyakorlati jegy eredményébe is: <em>“A gyakorlati
+                jegy a (pótolt/javított) zárthelyikkel, illetve a második beadandóval szerzett három részjegy egészre
+                kerekített átlaga, ha minden részjegy legalább elégséges. Különben a gyakorlati jegy elégtelen.”</em>
+        </p>
+        <p>A beadandóra vonatkozó “ponthatárok”:</p>
+        <ul>
+            <li>0 - 49% → elégtelen</li>
+            <li>50 - 64% → elégséges</li>
+            <li>65 - 74% → közepes</li>
+            <li>75 - 84% → jó</li>
+            <li>85 - 100% → jeles</li>
+        </ul>
+        <p>50% alatti eredménynél egységesen 0%-ot fogunk beírni BEADon, mivel nincs lényegi különbség.</p>
+        <p>Javítani bármennyiszer lehet, de a határidő szoros közeledtével egyre kisebb az esély rá, hogy lesz időnk
+            megnézni azt.</p>
+        <p>Szeretnénk mindenkit megkérni, hogy az alábbiak vegye figyelembe a feltöltés során:</p>
+        <ul>
+            <li>A forrásfájlokat a ZIP gyökerébe helyezzétek el, tehát ne mappát tömörítsetek, csupán a fájlokat!</li>
+            <li><code>input.txt</code> -t nem kérünk a ZIP-be, ez egyébként is figyelmen kívül lenne hagyva.</li>
+            <li>Az <code>output.txt.expected</code> felülírása nem jelent jó megoldást, ráadásul ez a fájl csak az után
+                jön létre, hogy a te programod lefutott, így nem tudnád felülírni a saját megoldásoddal, ha akarnád sem.
+                <hr>
+            </li>
+        </ul>
+        <p>Értékelési megjegyzés:</p>
+        <p>Az automata tesztelő elutasítja a megoldást, ha az nem fordult le (ennek okát is jelezni fogja). Amennyiben
+            fordítható, lefuttatja több különböző inputra, és összeveti a megoldásodat az elvárt kimenetekkel. Ha
+            mindegyik egyezik (a whitespacek között nem tesz különbséget, így mindegy, hogy a sorok végén van -e plusz
+            szóköz vagy nincs, illetve sorvégi enter az utolsó bejegyzés után), akkor a BEADon átment a megoldásod. Ez
+            után még valamelyik oktató is ellenőrzi a megoldást - a kódot átnézve, megjegyzéseket fűzve hozzá. Ha ez is
+            rendben van, akkor elfogadottnak minősítjük a beadandót. Ha valami problémába ütközünk (vagy a BEADon nem
+            megy át), akkor elutasításra kerül a megoldásod. Ennek okát részletezni fogjuk.</p>
+        <h4 id="egyéb-segítség">Egyéb segítség:</h4>
+        <p><a
+                href="https://people.inf.elte.hu/mykeesg/index.php?page=orsi&amp;year=19_20_1">https://people.inf.elte.hu/mykeesg/index.php?page=orsi&amp;year=19_20_1</a>
+        </p>
+        <p>Az értékelési / kódolási guide szintén az előbbi linken érhető el (FAQ és követelmények).</p>
+        <p>Az automatikus tesztelés működik!</p>
+    </div>
+</div>
